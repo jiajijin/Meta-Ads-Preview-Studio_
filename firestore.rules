@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function me(uid) { return signedIn() && request.auth.uid == uid; }
+    // Put the same admin emails as in firebase-config.js (lowercase, email must be verified by the provider).
+    function isAdmin() {
+      return signedIn() && request.auth.token.email != null
+        && request.auth.token.email.lower() in ['jinjiaji20040228@gmail.com'];
+    }
+    function isAcct(id) { return id.matches('a_.*'); }
+    // An ad account is locked for 30 days after it was saved.
+    function unlocked() { return request.time > resource.data.savedAt + duration.value(30, 'd'); }
+
+    // Each person's saved pages (p_...) and ad accounts (a_...)
+    match /data/users/{uid}/{docId} {
+      allow read: if me(uid);
+      allow create: if me(uid)
+        && (!isAcct(docId) || request.resource.data.savedAt == request.time);
+      allow update: if me(uid)
+        && (!isAcct(docId) || (unlocked() && request.resource.data.savedAt == request.time));
+      allow delete: if me(uid) && (!isAcct(docId) || unlocked());
+    }
+
+    // View links: anyone with the link can read one page (ids are long and random). No listing.
+    match /pub/{uid}/s/{sid} {
+      allow get: if true;
+      allow create, update, delete: if me(uid);
+    }
+
+    // Edit links: any signed-in person with the link can read and edit. Only the creator can delete.
+    match /collab/{cid} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.owner == request.auth.uid;
+      allow update: if signedIn() && request.resource.data.owner == resource.data.owner;
+      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
+    }
+
+    // Names shown in "Last edited by"
+    match /profiles/{uid} {
+      allow read: if signedIn();
+      allow write: if me(uid);
+    }
+
+    match /feedback/{uid} {
+      allow read, delete: if me(uid) || isAdmin();
+      allow create, update: if me(uid) || isAdmin();
+    }
+  }
+}
